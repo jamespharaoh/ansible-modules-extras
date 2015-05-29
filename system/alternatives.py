@@ -33,6 +33,7 @@ version_added: "1.6"
 author:
     - '"David Wittman (@DavidWittman)" <dwittman@gmail.com>'
     - '"Gabe Mulley (@mulby)" <gabe.mulley@gmail.com>'
+    - '"James Pharaoh" <james@pharaoh.uk>'
 options:
   name:
     description:
@@ -47,6 +48,13 @@ options:
       - The path to the symbolic link that should point to the real executable.
       - This option is required on RHEL-based distributions
     required: false
+  force:
+    description:
+      - Replace or drop any real file that is installed where an alternative
+        link has to be installed or removed.
+    choices: [ "yes", "no" ]
+    required: false
+    default: "yes"
 requirements: [ update-alternatives ]
 '''
 
@@ -69,6 +77,7 @@ def main():
             name = dict(required=True),
             path = dict(required=True),
             link = dict(required=False),
+            force = dict(default=False, type='bool'),
         ),
         supports_check_mode=True,
     )
@@ -77,6 +86,7 @@ def main():
     name = params['name']
     path = params['path']
     link = params['link']
+    force = params['force']
 
     UPDATE_ALTERNATIVES = module.get_bin_path('update-alternatives',True)
 
@@ -114,7 +124,16 @@ def main():
                         link = line.split()[1]
                         break
 
-    if current_path != path:
+    if not force:
+        need_to_force = False
+    elif not os.path.islink(link):
+        need_to_force = True
+    elif os.readlink(link) != '/etc/alternatives/' + name:
+        need_to_force = True
+    else:
+        need_to_force = False
+
+    if current_path != path or need_to_force:
         if module.check_mode:
             module.exit_json(changed=True, current_path=current_path)
         try:
@@ -123,10 +142,17 @@ def main():
                 if not link:
                     module.fail_json(msg="Needed to install the alternative, but unable to do so as we are missing the link")
 
-                module.run_command(
-                    [UPDATE_ALTERNATIVES, '--install', link, name, path, str(DEFAULT_LINK_PRIORITY)],
-                    check_rc=True
-                )
+                if need_to_force:
+                    module.run_command(
+                        [UPDATE_ALTERNATIVES, '--install', '--force', link, name, path, str(DEFAULT_LINK_PRIORITY)],
+                        check_rc=True
+                    )
+
+                else:
+                    module.run_command(
+                        [UPDATE_ALTERNATIVES, '--install', link, name, path, str(DEFAULT_LINK_PRIORITY)],
+                        check_rc=True
+                    )
 
             # select the requested path
             module.run_command(
@@ -137,6 +163,7 @@ def main():
             module.exit_json(changed=True)
         except subprocess.CalledProcessError, cpe:
             module.fail_json(msg=str(dir(cpe)))
+
     else:
         module.exit_json(changed=False)
 
